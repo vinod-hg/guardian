@@ -1,13 +1,14 @@
 guardian
 ========
 
-Guardian allows calling (any local or accross module) functions in guards using parse transform.
+Guardian allows calling (any local or across module) functions in guards using parse transform.
 
-It is acheived by calling 
+It is achieved by calling 
 
     -compile({parse_transform, guardian}).
 
-The function with guards calling other not allowed guard function, is replaced with function with case statements.
+The function with calling other functions in guards which are not allowed in function guards, is replaced 
+with function with case statements.
 
 Example: 
 --------
@@ -39,10 +40,10 @@ Current Limitations
 2. A new function with <function_name>_guard is created. Hence there cannot be any other function 
    with the same name as of the new function generated.
 3. Warning messages are displayed for each of the clauses in which variables are used only in guard 
-   and not in the function body. Workaround is to use variable names with startiing "_" which are 
+   and not in the function body. Workaround is to use variable names with starting "_" which are 
    only used in function guards.
 
 
-Please report issues/bugs and enhancement requests / suggesions so that it can be improved further.
+Please report issues/bugs and enhancement requests / suggestions so that it can be improved further.
 Current limitation and other improvements will be provided in future.
 
