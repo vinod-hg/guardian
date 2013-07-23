@@ -5,9 +5,15 @@
 -module(guardian).
 
 -export([parse_transform/2]).
--compile(export_all).
+%% -compile(export_all).
 
+-ifdef(debug).
 -define(PRINT(PrintMsg), io:format("~n~p~n", [PrintMsg])).
+-define(PRINT(PrintMsg, Params), io:format(PrintMsg, Params)).
+-else.
+-define(PRINT(PrintMsg), ok).
+-define(PRINT(PrintMsg, Params), ok).
+-endif.
 
 %% ====================================================================
 %% API functions
@@ -15,17 +21,19 @@
 
 
 parse_transform(Forms, _Options) ->
-	%io:format("Forms: ~p ~nOptions:~p~n~n",[Forms, Options]),
+	?PRINT("Forms: ~p ~nOptions:~p~n~n", [Forms, _Options]),
 	NewForms = get_new_forms(Forms),
-	%io:format("NewForms: ~p~n~n", [NewForms]),
+	?PRINT("NewForms: ~p~n~n", [NewForms]),
 	NewForms.
 
 get_new_forms(Forms) ->
 	lists:foldl(fun(Func = {function, _Line, _FunctionName, _Arity, Clauses}, FinalForms) ->
 					  case check_clauses(Clauses) of
 						  true ->
+							  ?PRINT({true, _FunctionName}),
 							  FinalForms ++ get_new_functions(Func);
 						  false ->
+							  ?PRINT({false, _FunctionName}),
 							  FinalForms ++ [Func]
 					  end;
 				 (Any, FinalForms) ->
@@ -35,7 +43,7 @@ get_new_forms(Forms) ->
 check_clauses([]) ->
 	false;
 check_clauses([{clause, _ClauseLineNo, _VarList, Conditions, _Body} | Clauses]) ->
-%% 	?PRINT({ClauseLineNo, Conditions}),
+	?PRINT({_ClauseLineNo, Conditions}),
 	check_conditions(Conditions) orelse	check_clauses(Clauses).
 
 
@@ -48,27 +56,27 @@ check_conditions([Condition | Rest]) ->
 check_condition([]) ->
 	false;
 check_condition([{call, _LineNo, {remote,_, {_,_,Mod},{_,_,Fun}}, FunctionArgs } | Rest]) ->
-%%   	?PRINT({call, Mod, Fun}),
-	case erlang:is_builtin(Mod, Fun, length(FunctionArgs)) of
+  	?PRINT({call, Mod, Fun}),
+	case is_allowed({Mod, Fun, length(FunctionArgs)}) of
 		true ->
 			check_condition(Rest);
 		false ->
 			true
 	end;
 check_condition([{call, _LineNo, {_,_, Fun}, FunctionArgs } | Rest]) ->
-%% 	?PRINT({call, Fun}),
-	case erlang:is_builtin(erlang, Fun, length(FunctionArgs)) of
+	?PRINT({call, Fun}),
+	case is_allowed({erlang, Fun, length(FunctionArgs)}) of
 		true ->
 			check_condition(Rest);
 		false ->
 			true
 	end;
 check_condition([{op,_LineNo,_Operation,LeftHand,RightHand } | Rest]) ->
-%% 	?PRINT({op, LeftHand,RightHand}),
+	?PRINT({op, LeftHand,RightHand}),
 	check_condition([LeftHand]) orelse check_condition([RightHand]) orelse check_condition(Rest)
 ;
 check_condition([_Any | Rest]) ->
-%% 	?PRINT({unknown,Any}),
+	?PRINT({unknown,_Any}),
 	check_condition(Rest).
 
 get_new_functions(Func) ->
@@ -120,4 +128,40 @@ get_false_clause(Clauses = [{clause, ClauseLine, _Vars, [[_Cond]], _Body} | _], 
 	 
 
 
+is_allowed(Func) ->
+	List = [{erlang,abs, 1},
+			{erlang,binary_part,2},
+			{erlang,binary_part,3},
+			{erlang,bit_size,1},
+			{erlang,byte_size,1},
+			{erlang,element,2},
+			{erlang,float,1},
+			{erlang,hd,1},
+			{erlang,is_atom,1},
+			{erlang,is_binary,1},
+			{erlang,is_bitstring,1},
+			{erlang,is_boolean,1},
+			{erlang,is_float,1},
+			{erlang,is_function,1},
+			{erlang,is_function,2},
+			{erlang,is_integer,1},
+			{erlang,is_list,1},
+			{erlang,is_number,1},
+			{erlang,is_pid,1},
+			{erlang,is_port,1},
+			{erlang,is_record,2},
+			{erlang,is_record,3},
+			{erlang,is_reference,1},
+			{erlang,is_tuple,1},
+			{erlang,length,1},
+			{erlang,node,0},
+			{erlang,node,1},
+			{erlang,round,1},
+			{erlang,self,0},
+			{erlang,size,1},
+			{erlang,tl,1},
+			{erlang,trunc,1},
+			{erlang,tuple_size,1}
+		   ],
+	lists:member(Func, List).
 
