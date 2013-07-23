@@ -113,6 +113,9 @@ get_true_clause(ClauseLine, Vars, NewFunction, GuardNo) ->
                  {atom,ClauseLine, NewFunction},
                  [{atom,ClauseLine, get_guard(GuardNo)}] ++ Vars}]}].
 
+get_false_clause([], _NewFunction, _GuardNo) ->
+	[];
+
 get_false_clause([{clause, ClauseLine, Vars, [], _Body}], NewFunction, GuardNo) ->
 	[{clause, ClauseLine, [{atom,ClauseLine,false}], [],
 	 [{call,ClauseLine, {atom,ClauseLine, NewFunction},
@@ -120,7 +123,7 @@ get_false_clause([{clause, ClauseLine, Vars, [], _Body}], NewFunction, GuardNo) 
 
 get_false_clause([{clause, ClauseLine, Vars, [], Body} | Rest], NewFunction, GuardNo) ->
 	[{clause, ClauseLine, [{atom,ClauseLine,false}], [],
-	 get_case([{clause, ClauseLine, Vars, [[{atom,50,true}]], Body} | Rest], NewFunction, GuardNo)}];
+	 get_case([{clause, ClauseLine, Vars, [[{atom,ClauseLine,true}]], Body} | Rest], NewFunction, GuardNo)}];
 
 get_false_clause(Clauses = [{clause, ClauseLine, _Vars, [[_Cond]], _Body} | _], NewFunction, GuardNo) ->
 	[{clause, ClauseLine, [{atom,ClauseLine,false}], [],
