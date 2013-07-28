@@ -30,9 +30,11 @@ get_new_forms(Forms) ->
 	lists:foldl(fun(Func = {function, _Line, _FunctionName, _Arity, Clauses}, FinalForms) ->
 					  case check_clauses(Clauses) of
 						  true ->
+							  % If there is a clause with not allowed function, then replace with case
 							  ?PRINT({true, _FunctionName}),
 							  FinalForms ++ get_new_functions(Func);
 						  false ->
+							  % If there is no clause with not allowed function, then do not change the function
 							  ?PRINT({false, _FunctionName}),
 							  FinalForms ++ [Func]
 					  end;
@@ -40,6 +42,8 @@ get_new_forms(Forms) ->
 					  FinalForms ++ [Any]
 			  end, [], Forms).
 
+
+%% Check whether the function has guards that call not allowed functions
 check_clauses([]) ->
 	false;
 check_clauses([{clause, _ClauseLineNo, _VarList, Conditions, _Body} | Clauses]) ->
@@ -79,56 +83,120 @@ check_condition([_Any | Rest]) ->
 	?PRINT({unknown,_Any}),
 	check_condition(Rest).
 
-get_new_functions(Func) ->
-	[get_case_func(Func), get_new_clauses_func(Func)].
 
-get_new_clauses_func({function, Line, FunctionName, Arity, Clauses}) ->
-	NewFunctionName = list_to_atom(atom_to_list(FunctionName) ++ "_guard"),
+%% Change the function to case based.
+get_new_functions(Func = {function, _Line, _FunctionName, Arity, _Clauses}) ->
+	NewVarList = [ list_to_atom("GuardVariable" ++ integer_to_list(Seq)) || Seq <- lists:seq(1, Arity)],
+	?PRINT(NewVarList),
+	[get_case_func(Func, NewVarList)].
+
+get_new_clauses_func({function, Line, _FunctionName, _Arity, Clauses}) ->
 	{NewClauses, _} = 
-	lists:foldl(fun({clause, ClauseLineNo, VarList, _Conditions, Body} , {ClausesAcc, GuardNo}) ->
+	lists:foldl(fun({clause, ClauseLineNo, VarList, Conditions, Body} , {ClausesAcc, GuardNo}) ->
 						Atom = list_to_atom("guard" ++ integer_to_list(GuardNo)),
-						NewClause = {clause, ClauseLineNo, [{atom, ClauseLineNo, Atom}] ++ VarList, [], Body},
+						NewClause = {clause, ClauseLineNo, [{atom, ClauseLineNo, Atom}] ++ 
+										 get_new_vars(VarList, Conditions, Body), [], Body},
 						{[NewClause] ++ ClausesAcc, GuardNo + 1}
 				end, {[], 1}, Clauses),
-	{function, Line, NewFunctionName, Arity + 1, NewClauses}.
+	[{match,Line, {var,Line,'Fun'}, {'fun',Line, {clauses, lists:reverse(NewClauses)}}}].
 
-get_case_func({function, Line, FunctionName, Arity, Clauses = [{clause, _ClauseLine, Vars, _Cond, _Body}|_]}) ->
-	NewFunctionName = list_to_atom(atom_to_list(FunctionName) ++ "_guard"),
-	NewBody =  	 get_case(Clauses, NewFunctionName, 1),
-	NewClause = [{clause, Line, Vars, [], NewBody}],	
+get_case_func(Func = {function, Line, FunctionName, Arity, Clauses = [{clause, _ClauseLine, _Vars, _Cond, _Body}|_]}, NewVarList) ->
+	NewBody =  	get_new_clauses_func(Func) ++ get_case(Clauses, 'Fun', 1, NewVarList),
+	NewClause = [{clause, Line, get_vars(NewVarList, Line), [], NewBody}],	
 	{function, Line, FunctionName, Arity, NewClause}.
 	
 
 get_guard(GuardNo) ->
 	list_to_atom("guard" ++ integer_to_list(GuardNo)).
 
-get_case([{clause, ClauseLine, Vars, [[Cond]], _Body} | Clauses], NewFunction, GuardNo) ->
-	[{'case', ClauseLine, Cond, 
-	  get_true_clause(ClauseLine, Vars, NewFunction, GuardNo) ++ 
-		  get_false_clause(Clauses, NewFunction, GuardNo + 1)}].
+get_case([{clause, ClauseLine, Vars, [[Cond]], _Body} | Clauses], NewFunction, GuardNo, NewVarList) ->
+	[{'case', ClauseLine, get_new_cond(Cond, Vars, NewVarList), 
+	  get_true_clause(ClauseLine, Vars, NewFunction, GuardNo, NewVarList) ++ 
+		  get_false_clause(Clauses, NewFunction, GuardNo + 1, NewVarList)}].
 	  
-get_true_clause(ClauseLine, Vars, NewFunction, GuardNo) ->
+get_true_clause(ClauseLine, _Vars, NewFunction, GuardNo, NewVarList) ->
 	 [{clause, ClauseLine, [{atom, ClauseLine, true}], [],
 	  [{call,ClauseLine,
-                 {atom,ClauseLine, NewFunction},
-                 [{atom,ClauseLine, get_guard(GuardNo)}] ++ Vars}]}].
+                 {var,ClauseLine, NewFunction},
+                 [{atom,ClauseLine, get_guard(GuardNo)}] ++ get_vars(NewVarList, ClauseLine)}]}].
 
-get_false_clause([], _NewFunction, _GuardNo) ->
+get_false_clause([], _NewFunction, _GuardNo, _NewVarList) ->
 	[];
 
-get_false_clause([{clause, ClauseLine, Vars, [], _Body}], NewFunction, GuardNo) ->
+get_false_clause([{clause, ClauseLine, _Vars, [], _Body}], NewFunction, GuardNo, NewVarList) ->
 	[{clause, ClauseLine, [{atom,ClauseLine,false}], [],
-	 [{call,ClauseLine, {atom,ClauseLine, NewFunction},
-	   [{atom,ClauseLine,get_guard(GuardNo)}] ++ Vars}]}];
+	 [{call,ClauseLine, {var,ClauseLine, NewFunction},
+	   [{atom,ClauseLine,get_guard(GuardNo)}] ++ get_vars(NewVarList, ClauseLine)}]}];
 
-get_false_clause([{clause, ClauseLine, Vars, [], Body} | Rest], NewFunction, GuardNo) ->
+get_false_clause([{clause, ClauseLine, Vars, [], Body} | Rest], NewFunction, GuardNo, NewVarList) ->
 	[{clause, ClauseLine, [{atom,ClauseLine,false}], [],
-	 get_case([{clause, ClauseLine, Vars, [[{atom,ClauseLine,true}]], Body} | Rest], NewFunction, GuardNo)}];
+	 get_case([{clause, ClauseLine, Vars, [[{atom,ClauseLine,true}]], Body} | Rest], NewFunction, GuardNo, NewVarList)}];
 
-get_false_clause(Clauses = [{clause, ClauseLine, _Vars, [[_Cond]], _Body} | _], NewFunction, GuardNo) ->
+get_false_clause(Clauses = [{clause, ClauseLine, _Vars, [[_Cond]], _Body} | _], NewFunction, GuardNo, NewVarList) ->
 	[{clause, ClauseLine, [{atom,ClauseLine,false}], [],
-	 get_case(Clauses, NewFunction, GuardNo)}].
+	 get_case(Clauses, NewFunction, GuardNo, NewVarList)}].
 	 
+%% convert from Variable Names to PT variable list
+get_vars(VarList, LineNo) ->
+	[ {var, LineNo, Var} || Var <- VarList].
+
+
+%% Replace the variable names with the new Guard Variable names in the conditions
+get_new_cond(Cond, Vars, NewVarList) ->
+	VarZip = lists:zip([ Var || {_,_,Var} <- Vars], NewVarList),
+	get_new_cond(Cond, VarZip).
+
+get_new_cond(_Cond = {op, Line , Oper, LeftHand, RigHand}, VarZip) ->
+	?PRINT(_Cond),
+	{op, Line , Oper, get_new_cond(LeftHand, VarZip), get_new_cond(RigHand, VarZip)};
+
+get_new_cond({call, LineNo, Remote = {remote,_, _,_}, VarList }, VarZip) ->
+	{call, LineNo , Remote, replace_var(VarList, VarZip)};
+
+get_new_cond({call, LineNo , Fun, VarList}, VarZip) ->
+	{call, LineNo , Fun, replace_var(VarList, VarZip)};
+
+get_new_cond(OtherCond, _VarZip) ->
+	OtherCond.
+
+%% Replace the Variable with the new variable	
+replace_var(VarList, VarZip) ->
+	?PRINT({VarList, VarZip}),
+	lists:foldr(fun({var, Line, Var}, NewVarList) ->
+						{_, NewVar} = lists:keyfind(Var, 1, VarZip),
+						[{var, Line, NewVar} | NewVarList]
+				end, [], VarList).
+	
+get_new_vars(VarList, Cond, Body) ->
+	?PRINT({body, Cond, Body}),
+	
+%% 	?PRINT({Var, is_var_present(Var, Body)}),
+	lists:foldr(fun({var,Line,Var}, NewVarList) ->
+						case is_var_present(Var, Cond) andalso not is_var_present(Var, Body) of
+							true ->
+								[{var,Line,get_new_var(Var)}| NewVarList];
+							false ->
+								[{var,Line,Var} | NewVarList]
+						end;
+				   (AnyVar, NewVarList) ->
+						[AnyVar, NewVarList]				
+				end, [], VarList).
+
+get_new_var(Var) ->
+	list_to_atom("_" ++ atom_to_list(Var)).
+	
+	
+is_var_present(Var, Var) ->
+	true;
+is_var_present(Var, Body) when is_list(Body) ->
+	lists:foldl(fun(InnerBody, Present) ->
+						is_var_present(Var, InnerBody) or Present
+				end, false, Body);
+is_var_present(Var, Body) when is_tuple(Body) ->
+	is_var_present(Var, tuple_to_list(Body));
+is_var_present(_Var, _Body) ->
+	?PRINT(_Body),
+	false.
 
 
 is_allowed(Func) ->
