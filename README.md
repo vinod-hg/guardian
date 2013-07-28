@@ -10,6 +10,14 @@ It is achieved by calling
 The function with calling other functions in guards which are not allowed in function guards, is replaced 
 with function with case statements.
 
+Features:
+---------
+1. All functions in guards are supported.
+2. Line numbers are of the actual function. For example if there is a runtime error in the guard function 
+   the error report shown will have the line number of the original function and not the line of the generated 
+   case function. Hence there is no change to the user. He can debug with his code without thinking of the 
+   parsed case function.
+
 Example: 
 --------
 
@@ -18,32 +26,24 @@ Example:
     greetings(Name, AllowedNames) ->
       {leave, Name}.
 
-Currently this code is converted into 2 functions. The new function is created with _guard. 
+The above function is replace with function having case clauses. 
+This is hidden and it does not affect the user while debugging.
 
-    greetings(Name, AllowedNames) ->
-      case lists:member(Name, AllowedNames) of
+    greetings(GuarVariable1, GuardVariable2) ->
+      Fun = fun(guard1, Name, _AllowedNames) ->
+                    {welcome, Name};
+               (guard2, Name, AllowedNames) ->
+                    {leave, Name}
+            end,
+      case lists:member(GuarVariable1, GuardVariable2) of
         true ->
-          greetings_guard(guard1, Name, AllowedNames);
+          Fun(guard1, GuarVariable1, GuardVariable2);
         false ->
-          greetings_guard(guard2, Name, AllowedNames)
+          Fun(guard2, GuarVariable1, GuardVariable2)
       end.
-      
-    greetings_guard(guard1, Name, AllowedNames) ->
-      {welcome, Name};
-    greetings_guard(guard2, Name, AllowedNames) ->
-      {leave, Name}.
 
 
-Current Limitations
-------- -----------
-1. Variable names in all the function clauses has to be same.
-2. A new function with <function_name>_guard is created. Hence there cannot be any other function 
-   with the same name as of the new function generated.
-3. Warning messages are displayed for each of the clauses in which variables are used only in guard 
-   and not in the function body. Workaround is to use variable names with starting "_" which are 
-   only used in function guards.
-
-
+Note:
+-----
 Please report issues/bugs and enhancement requests / suggestions so that it can be improved further.
-Current limitation and other improvements will be provided in future.
 
