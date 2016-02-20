@@ -10,8 +10,7 @@
 -export([test/0]).
 
 -compile({parse_transform, guardian}).
--compile(export_all).
-
+%% -compile(export_all).
 
 
 %% ====================================================================
@@ -31,17 +30,17 @@
 %% 	
 %% 	case length(String) == 0 of
 %% 		true ->
-%% 			Fun(guard1, String, SubString);
+%% 			Fun(1, String, SubString);
 %% 		false ->
 %% 			case string:equal(String, SubString) of
 %% 				true ->
-%% 					Fun(guard2, String, SubString);
+%% 					Fun(2, String, SubString);
 %% 				false ->
 %% 					case str(String, SubString) > 0 of
 %% 						true ->
-%% 							Fun(guard3, String, SubString);
+%% 							Fun(3, String, SubString);
 %% 						false ->
-%% 							Fun(guard4, String, SubString)
+%% 							Fun(4, String, SubString)
 %% 					end
 %% 			end
 %% 	end.
@@ -58,23 +57,27 @@
 
 
 string_state(String, SubString) when length(String) == 0 ->
-	case true of
-		true ->
-			ok
-	end,
-	unloaded;
+    case SubString == "ok" of
+        true ->
+            loaded;
+        false ->
+            unloaded
+    end;
 string_state(String, SubString) when string:equal(String, SubString) ->
 	loaded_complete;
 string_state(String, SubString) when str(String, SubString) > 0 ->
 	loaded;
 string_state(String, SubString) when length(String) == length(SubString) ->
 	loaded;
-string_state(String, SubString) ->
+string_state(String, SubString) when greetings(String, [vinod, SubString]) == {welcome, String} ->
+    loaded;
+string_state(_String, _SubString) ->
 	overloaded.
 
 str(String, SubString) ->
 	string:str(String, SubString).
 
+-spec test() -> {atom(), term()}.
 test() ->
 	string_state("hi", "h"),
 	greetings(vinod, [vinod]).
@@ -82,5 +85,5 @@ test() ->
 
 greetings(Name, AllowedNames) when lists:member(Name, AllowedNames) ->
 	{welcome, Name};
-greetings(UnknownName, AllowedNames) ->
+greetings(UnknownName, _AllowedNames) ->
 	{leave, UnknownName}.
