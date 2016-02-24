@@ -33,8 +33,8 @@ parse_transform(Forms, _Options) ->
     ?LOG_DEBUG("Forms: ~p ~nOptions:~p~n~n", [Forms, _Options]),
     %[io:format("Form: ~p~n", [Form]) || Form <- Forms],
     NewForms = get_new_forms(Forms),
-    ?LOG_DEBUG("NewForms: ~p~n~n", [NewForms]),
-    ?LOG_DEBUG("~s~n", [erl_prettypr:format(erl_syntax:form_list(NewForms))]),
+    ?LOG_ERROR("NewForms: ~p~n~n", [NewForms]),
+    ?LOG_ERROR("~s~n", [erl_prettypr:format(erl_syntax:form_list(NewForms))]),
     NewForms.
 
 get_new_forms(Forms) ->
@@ -83,18 +83,32 @@ is_condition_bif([_Any | Rest]) ->
     is_condition_bif(Rest).
 
 
-%% Change the function to case based. No of variables generated = Number of arity of the function.
-get_new_function(Func = {function, Line, FunctionName, Arity, Clauses}) ->
-    NewVarList = [ list_to_atom(?GUARD_VAR_START ++ integer_to_list(Seq)) || Seq <- lists:seq(1, Arity)],
-    ?LOG_DEBUG(NewVarList),
-    NewBody =  	get_new_clauses_func(Func) ++ get_case(Clauses, 'Fun', 1, NewVarList),
-    NewClause = [{clause, Line, get_vars(NewVarList, Line), [], NewBody}],	
+%% Change the function to case based. No of variables generated = Arity of the function.
+get_new_function({function, Line, FunctionName, Arity, Clauses}) ->
+    GenVarList = [ list_to_atom(?GUARD_VAR_START ++ integer_to_list(Seq)) || Seq <- lists:seq(1, Arity)],
+    ?LOG_DEBUG(GenVarList),
+    PatternClauses = replace_pattern(Clauses, GenVarList),
+    NewBody =  	get_new_clauses_func(Line, PatternClauses) ++ get_case(PatternClauses, 'Fun', 1, GenVarList),
+    NewClause = [{clause, Line, get_vars(GenVarList, Line), [], NewBody}],	
     {function, Line, FunctionName, Arity, NewClause}.
 
+%% Move the header pattern to guards
+replace_pattern(Clauses, GenVarList) ->
+    lists:reverse(lists:foldl(
+                    fun({clause, ClauseLineNo, PatternVarList, Conditions, Body} , ClausesAcc) ->
+                            ?LOG_ERROR({PatternVarList, Conditions, Body}),
+                            {NewVarList, ExtraCond} = patterns(PatternVarList, GenVarList),
+                            NewClause = {clause, ClauseLineNo, NewVarList,
+                                         {ExtraCond, Conditions}, Body},
+                            [NewClause | ClausesAcc]
+                    end, [], Clauses)).
+    
+
 %% Get an anonymous function based on the original function. Each one uniquely identified by th guard atom
-get_new_clauses_func({function, Line, _FunctionName, _Arity, Clauses}) ->
+get_new_clauses_func(Line, Clauses) ->
     {NewClauses, _} = 
         lists:foldl(fun({clause, ClauseLineNo, VarList, Conditions, Body} , {ClausesAcc, GuardNo}) ->
+                            ?LOG_ERROR({VarList, Conditions, Body}),
                             NewClause = {clause, ClauseLineNo, [{integer, ClauseLineNo, GuardNo}] ++ 
                                              get_new_vars(VarList, Conditions, Body), [], Body},
                             {[NewClause] ++ ClausesAcc, GuardNo + 1}
@@ -102,8 +116,8 @@ get_new_clauses_func({function, Line, _FunctionName, _Arity, Clauses}) ->
     [{match,Line, {var,Line,'Fun'}, {'fun',Line, {clauses, lists:reverse(NewClauses)}}}].
 
 %% Generate case clauses based on the function clauses.
-get_case([{clause, ClauseLine, Vars, [[Cond]], _Body} | Clauses], NewFunction, GuardNo, NewVarList) ->
-    [{'case', ClauseLine, get_new_cond(Cond, Vars, NewVarList), 
+get_case([{clause, ClauseLine, Vars, Conds, _Body} | Clauses], NewFunction, GuardNo, NewVarList) ->
+    [{'case', ClauseLine, get_new_cond(Conds, Vars, NewVarList), 
       get_true_clause(ClauseLine, Vars, NewFunction, GuardNo, NewVarList) ++ 
           get_false_clause(Clauses, NewFunction, GuardNo + 1, NewVarList)}].
 
@@ -117,14 +131,14 @@ get_true_clause(ClauseLine, _Vars, NewFunction, GuardNo, NewVarList) ->
 get_false_clause([], _NewFunction, _GuardNo, _NewVarList) ->
     [];
 
-get_false_clause([{clause, ClauseLine, _Vars, [], _Body}], NewFunction, GuardNo, NewVarList) ->
+get_false_clause([{clause, ClauseLine, _Vars, {[],[]}, _Body}], NewFunction, GuardNo, NewVarList) ->
     get_clause(ClauseLine, false, NewFunction, GuardNo, NewVarList);
 
-get_false_clause([{clause, ClauseLine, Vars, [], Body} | Rest], NewFunction, GuardNo, NewVarList) ->
+get_false_clause([{clause, ClauseLine, Vars, {[],[]}, Body} | Rest], NewFunction, GuardNo, NewVarList) ->
     ?CLAUSE(ClauseLine, false,
       get_case([{clause, ClauseLine, Vars, [[{atom,ClauseLine,true}]], Body} | Rest], NewFunction, GuardNo, NewVarList));
 
-get_false_clause(Clauses = [{clause, ClauseLine, _Vars, [[_Cond]], _Body} | _], NewFunction, GuardNo, NewVarList) ->
+get_false_clause(Clauses = [{clause, ClauseLine, _Vars, _Cond, _Body} | _], NewFunction, GuardNo, NewVarList) ->
     ?CLAUSE(ClauseLine, false, get_case(Clauses, NewFunction, GuardNo, NewVarList)).
 
 get_clause(ClauseLine, Bool, NewFunction, GuardNo, NewVarList) ->
@@ -139,10 +153,22 @@ get_vars(VarList, LineNo) ->
 
 
 %% Replace the variable names with the new Guard Variable names in the conditions
-get_new_cond(Cond, Vars, NewVarList) ->
-    VarZip = lists:zip([ Var || {_,_,Var} <- Vars], NewVarList),
-    ?LOG_DEBUG({Cond, VarZip}),
-    gexpr(Cond, VarZip).
+get_new_cond({Cond, Conds}, Vars, NewVarList) ->
+    VarZip = lists:zip([Var || {_,_,Var} <- Vars], NewVarList),
+    ?LOG_ERROR({old, Cond, Conds, VarZip}),
+    ?LOG_ERROR({guard, guards(Conds, VarZip)}),
+    ?LOG_ERROR({new, append_cond(Cond, guards(Conds, VarZip))}),
+    [NewCond] = append_cond(Cond, guards(Conds, VarZip)),
+    NewCond.
+
+guards([G0|Gs],_VZ) ->
+    add_cond(guard_and(G0,_VZ), guards(Gs, _VZ), 'orelse');
+guards([],_VZ) ->
+    [].
+
+guard_and([G0|Gs],_VZ) ->
+    append_cond([gexpr(G0,_VZ)], guard_and(Gs,_VZ));
+guard_and([],_VZ) -> [].
 
 %% Go throught each expression in the guard and replace the variables
 gexpr({var,_Line,_V} = Var, VarZip) -> replace_var(Var, VarZip);
@@ -207,6 +233,34 @@ grecord_inits([{record_field,Lf,{var,La,'_'},Val0}|Is],_VZ) ->
     Val1 = gexpr(Val0,_VZ),
     [{record_field,Lf,{var,La,'_'},Val1}|grecord_inits(Is,_VZ)];
 grecord_inits([],_VZ) -> [].
+
+
+%% Change the variable in pattern list
+patterns(Ps, Vs) ->
+    patterns(Ps, Vs, {[],[]}).
+
+patterns([P1 = {var,_Line,_V}|Ps],[_V0|Vs],{NewPs, NewCond}) ->
+    patterns(Ps, Vs, {[P1|NewPs], NewCond});
+patterns([P1|Ps],[V0|Vs],{NewPs, NewCond}) ->
+    Line = erlang:element(2,P1),
+    NewVar = {var,Line,V0},
+    patterns(Ps,Vs,{[NewVar|NewPs],append_cond(Line, P1, NewVar, NewCond)});
+patterns([], [],{Ps,Cs}) -> {lists:reverse(Ps),Cs}.
+
+append_cond(Line, P1, Var, []) ->
+    [{op,Line,'==',Var,P1}];
+append_cond(Line, P1, Var, [Cond]) ->
+    [{op,Line,'andalso', Cond, {op,Line,'==',Var,P1}}].
+
+append_cond(Cond, Conditions) ->
+    add_cond(Cond, Conditions, 'andalso').
+
+add_cond([], Conditions, _Type) ->
+    Conditions;
+add_cond(Cond, [], _Type) ->
+    Cond;
+add_cond([Cond], [Conditions], Type) ->
+    [{op,erlang:element(2,Cond),Type, Cond, Conditions}].
 
 pattern_grp([{bin_element,L1,E1,S1,T1} | Fs],_VZ) ->
     [{bin_element,L1,gexpr(E1,_VZ),gexpr(S1,_VZ),T1} | gexpr(Fs,_VZ)];
