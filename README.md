@@ -29,18 +29,15 @@ Example:
 The above function is replace with function having case clauses. 
 This is hidden and it does not affect the user while debugging.
 
-    greetings(GuarVariable1, GuardVariable2) ->
-      Fun = fun(guard1, Name, _AllowedNames) ->
-                    {welcome, Name};
-               (guard2, Name, AllowedNames) ->
-                    {leave, Name}
-            end,
-      case lists:member(GuarVariable1, GuardVariable2) of
-        true ->
-          Fun(guard1, GuarVariable1, GuardVariable2);
-        false ->
-          Fun(guard2, GuarVariable1, GuardVariable2)
-      end.
+    greetings(Name = _GuardVariable1, AllowedNames = _GuardVariable2) ->
+        case lists:member(Name, AllowedNames) of
+            true -> {welcome, Name};
+            _ ->
+                greetings_guardian1(_GuardVariable1, _GuardVariable2)
+        end.
+    
+    greetings_guardian1(UnknownName = _GuardVariable1, _AllowedNames = _GuardVariable2) ->
+        {leave, UnknownName}.
 
 
 Note:
