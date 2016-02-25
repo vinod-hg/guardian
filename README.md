@@ -1,22 +1,23 @@
 guardian
 ========
 
-Guardian allows calling (any local or across module) functions in guards using parse transform.
+Function guards is a very powerful feature of Erlang. But only BIF functions are supported. Guardian allows calling (any local or across module) functions in guards. This allows the code to be very short.
 
-It is achieved by calling 
+Usage:
+------
+It is achieved  using parse transforms. Just add parse_transform as guardian in the source file or specify during compilation.
 
     -compile({parse_transform, guardian}).
 
-The function with calling other functions in guards which are not allowed in function guards, is replaced 
-with function with case statements.
+Note:
+-----
+Please be careful while using non bif functions in guards. There should not be any side effects as the function could be called multiple times to resolve the match clause.
 
-Features:
+
+Internal:
 ---------
-1. All functions in guards are supported.
-2. Line numbers are of the actual function. For example if there is a runtime error in the guard function 
-   the error report shown will have the line number of the original function and not the line of the generated 
-   case function. Hence there is no change to the user. He can debug with his code without thinking of the 
-   parsed case function.
+Only the function calling other functions in guards (non BIF), is replaced with function with case statements in the AST. All other functions are transformed.
+Line numbers are of the actual function. For example if there is a runtime error in the guard function the error report shown will have the line number of the original function and not the line of the generated case function. Hence there is no change to the developer. The code can be debugged without thinking of the transformed function.
 
 Example: 
 --------
@@ -26,8 +27,8 @@ Example:
     greetings(Name, AllowedNames) ->
       {leave, Name}.
 
-The above function is replace with function having case clauses. 
-This is hidden and it does not affect the user while debugging.
+The above function is replaced with function having similar to the below functions. 
+This is hidden and it does not affect the developer while debugging.
 
     greetings(Name = _GuardVariable1, AllowedNames = _GuardVariable2) ->
         case lists:member(Name, AllowedNames) of
@@ -40,7 +41,7 @@ This is hidden and it does not affect the user while debugging.
         {leave, UnknownName}.
 
 
-Note:
------
+Support:
+--------
 Please report issues/bugs and enhancement requests / suggestions so that it can be improved further.
 
