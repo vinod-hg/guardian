@@ -16,7 +16,7 @@ Please be careful while using non BIF functions in guards. There should not be a
 
 Internal:
 ---------
-* Only the function calling other functions in guards (non BIF), is replaced with function with case statements in the AST. All other functions are transformed.
+* Only the function calling other functions in guards (non BIF), is replaced with function with case statements in the AST. All other functions are not transformed.
 * It maintains the guard sequence.
 * Line numbers are of the actual function. For example if there is a runtime error in the guard function the error report shown will have the line number of the original function and not the line of the generated case function. Hence there is no change to the developer. The code can be debugged without thinking of the transformed function.
 
