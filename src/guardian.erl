@@ -5,7 +5,8 @@
 -module(guardian).
 
 -export([parse_transform/2]).
-%% -compile(export_all).
+
+-export([parse_ast/2]).
 
 -define(LOG(Level, PrintMsg, Params), io:format("[~p][~p] " ++ PrintMsg, [Level, ?LINE] ++ Params)).
 -define(LOG(Level, Params), ?LOG(Level, "~p~n", [Params])).
@@ -23,6 +24,7 @@
 
 
 -define(GUARD_VAR_START, "_GuardVariable").
+-define(FUN, "_guardian").
 
 %% ====================================================================
 %% API functions
@@ -44,7 +46,7 @@ get_new_forms(Forms) ->
                               false ->
                                   % If there is a clause with not allowed function, then replace with case
                                   ?LOG_DEBUG({true, _FunctionName}),
-                                  [get_new_function(Func) | FinalForms];
+                                  get_new_functions(Func) ++ FinalForms;
                               true ->
                                   % If there is no clause with not allowed function, then do not change the function
                                   ?LOG_DEBUG({false, _FunctionName}),
@@ -59,7 +61,6 @@ get_new_forms(Forms) ->
 is_clauses_bif([]) ->
     true;
 is_clauses_bif([{clause, _ClauseLineNo, _VarList, Conditions, _Body} | Clauses]) ->
-    ?LOG_DEBUG({_ClauseLineNo, Conditions}),
     is_conditions_bif(Conditions) andalso is_clauses_bif(Clauses).
 
 is_conditions_bif([]) ->
@@ -70,25 +71,127 @@ is_conditions_bif([Condition | Rest]) ->
 is_condition_bif([]) ->
     false;
 is_condition_bif([{call, _LineNo, {remote,_, {_,_,Mod},{_,_,Fun}}, FunctionArgs } | Rest]) ->
-    ?LOG_DEBUG({call, Mod, Fun}),
     is_guard_bif(Mod, Fun, length(FunctionArgs)) andalso is_condition_bif(Rest);
 is_condition_bif([{call, _LineNo, {_,_, Fun}, FunctionArgs } | Rest]) ->
-    ?LOG_DEBUG({call, Fun}),
     is_guard_bif(Fun, length(FunctionArgs)) andalso is_condition_bif(Rest);
 is_condition_bif([{op,_LineNo,_Operation,LeftHand,RightHand } | Rest]) ->
-    ?LOG_DEBUG({op, LeftHand,RightHand}),
     is_condition_bif([LeftHand]) andalso is_condition_bif([RightHand]) andalso is_condition_bif(Rest);
 is_condition_bif([_Any | Rest]) ->
-    ?LOG_ERROR({unknown,_Any}),
     is_condition_bif(Rest).
 
+is_guard_bif(Name, Arity) ->
+    erl_internal:guard_bif(Name, Arity).
+
+is_guard_bif(erlang, Name, Arity) ->
+    erl_internal:guard_bif(Name, Arity);
+is_guard_bif(_, _Name, _Arity) ->
+    false.
+
+%% Change the function to case based. No of variables generated = Arity of the function.
+get_new_functions({function, Line, FunctionName, Arity, Clauses}) ->
+    GenVarList = [ {var, Line, list_to_atom(?GUARD_VAR_START ++ integer_to_list(Seq))} || Seq <- lists:seq(1, Arity)],
+    new_fun(Clauses, GenVarList, FunctionName, 1, length(Clauses), []).
+
+%% Generate new functions based on the function clauses.
+new_fun([Clause| Clauses], NewVarList, FunName, FunNum, TotalFuns, Funs) ->
+    new_fun(Clauses, NewVarList, FunName, FunNum + 1, TotalFuns,
+            [get_fun(Clause, NewVarList, FunName, FunNum, TotalFuns) | Funs]);
+new_fun([], _NewVarList, _FunName, _FunNum, _TotalFuns, Funs) ->
+    Funs.
+
+get_fun({clause, ClauseLine, Vars, _Conds, _Body} = Clause, NewVarList, Fun, FunNum, TotalFuns) ->
+    {function, ClauseLine, get_guard_fun(Fun, FunNum-1), length(NewVarList),
+     [{clause, ClauseLine, get_new_vars(Vars, NewVarList), [], get_case(Clause, NewVarList, Fun, FunNum, TotalFuns)}]
+          ++ get_next_fun_pattern_clause(is_pattern_match_expr(Vars), ClauseLine, NewVarList, Fun, FunNum, TotalFuns)}.
+
+get_case(Clause, NewVarList, Fun, FunNum, TotalFuns) ->
+    get_condition_case(Clause, NewVarList, Fun, FunNum, TotalFuns).
+
+get_condition_case({clause, _ClauseLine, _Vars, [], Body}, _NewVarList, _Fun, _FunNum, _TotalFuns) ->
+    Body;
+get_condition_case({clause, ClauseLine, _Vars, Conds, Body}, NewVarList, Fun, FunNum, TotalFuns) ->
+    [{'case', ClauseLine, get_new_cond(Conds),
+      [{clause, ClauseLine, [{atom, ClauseLine, true}], [], Body}]
+          ++ get_next_fun_clause(ClauseLine, [{var, ClauseLine, '_'}], NewVarList, Fun, FunNum, TotalFuns)}].
+
+get_next_fun_pattern_clause(false, _ClauseLine, _NewVarList, _Fun, _FunNum, _TotalFuns) ->
+    [];
+get_next_fun_pattern_clause(true, ClauseLine, NewVarList, Fun, FunNum, TotalFuns) ->
+    get_next_fun_clause(ClauseLine, NewVarList, NewVarList, Fun, FunNum, TotalFuns).
+
+get_next_fun_clause(_ClauseLine, _ClauseVars, _NewVarList, _Fun, TotalFuns, TotalFuns) ->
+    [];
+get_next_fun_clause(ClauseLine, ClauseVars, NewVarList, Fun, FunNum, _TotalFuns) ->
+    [{clause, ClauseLine, ClauseVars, [],
+            [{call,ClauseLine, {atom,ClauseLine, get_guard_fun(Fun, FunNum)}, NewVarList}]}].
+
+get_guard_fun(Fun, 0) ->
+    Fun;
+get_guard_fun(Fun, FunNum) ->
+    list_to_atom(atom_to_list(Fun) ++ ?FUN ++ integer_to_list(FunNum)).
+
+get_line_no(Expr) ->
+    erlang:element(2, Expr).
+
+get_new_vars([Var| Vars], [NewVar| NewVarList]) ->
+    [{match, get_line_no(Var), Var, NewVar} | get_new_vars(Vars, NewVarList)];
+get_new_vars([], []) ->
+    [].
+
+get_new_cond([G0|Gs]) ->
+    add_cond(get_new_cond_and(G0), get_new_cond(Gs), 'orelse');
+get_new_cond([]) ->
+    [].
+
+get_new_cond_and([G0|Gs]) ->
+    add_cond(G0, get_new_cond_and(Gs), 'andalso');
+get_new_cond_and([]) ->
+    [].
+
+add_cond([], Cond, _Type) ->
+    Cond;
+add_cond(Cond, [], _Type) ->
+    Cond;
+add_cond(Cond1, Cond2, Type) ->
+    {op, erlang:element(2, Cond1), Type, Cond1, Cond2}.
+
+%% Change the variable in pattern list
+is_pattern_match_expr([]) -> false;
+is_pattern_match_expr([{var, _Line, _V} | Ps]) ->
+    is_pattern_match_expr(Ps);
+is_pattern_match_expr(_) ->
+    true.
+
+%% Parse the abstract form
+-spec parse_ast([erl_parse:abstract_form()], [compile:option()]) -> [erl_parse:abstract_form()].
+parse_ast(Forms, _Options) ->
+    ?LOG_ERROR("Forms: ~p ~nOptions:~p~n~n", [Forms, _Options]),
+    NewForms =
+        lists:reverse(
+          lists:foldl(fun(Func = {function, _Line, _FunctionName, _Arity, Clauses}, FinalForms) ->
+                              case is_clauses_bif(Clauses) of
+                                  false ->
+                                      % If there is a clause with not allowed function, then replace with case
+                                      ?LOG_DEBUG({true, _FunctionName}),
+                                      get_new_function(Func) ++ FinalForms;
+                                  true ->
+                                      % If there is no clause with not allowed function, then do not change the function
+                                      ?LOG_DEBUG({false, _FunctionName}),
+                                      [Func | FinalForms]
+                              end;
+                         (Any, FinalForms) ->
+                              [Any | FinalForms]
+                      end, [], Forms)),
+    ?LOG_ERROR("NewForms: ~p~n~n", [NewForms]),
+    ?LOG_ERROR("~s~n", [erl_prettypr:format(erl_syntax:form_list(NewForms))]),
+    NewForms.
 
 %% Change the function to case based. No of variables generated = Number of arity of the function.
 get_new_function(Func = {function, Line, FunctionName, Arity, Clauses}) ->
     NewVarList = [ list_to_atom(?GUARD_VAR_START ++ integer_to_list(Seq)) || Seq <- lists:seq(1, Arity)],
     ?LOG_DEBUG(NewVarList),
-    NewBody =  	get_new_clauses_func(Func) ++ get_case(Clauses, 'Fun', 1, NewVarList),
-    NewClause = [{clause, Line, get_vars(NewVarList, Line), [], NewBody}],	
+    NewBody =   get_new_clauses_func(Func) ++ get_case(Clauses, 'Fun', 1, NewVarList),
+    NewClause = [{clause, Line, get_vars(NewVarList, Line), [], NewBody}],  
     {function, Line, FunctionName, Arity, NewClause}.
 
 %% Get an anonymous function based on the original function. Each one uniquely identified by th guard atom
@@ -213,7 +316,7 @@ pattern_grp([{bin_element,L1,E1,S1,T1} | Fs],_VZ) ->
 pattern_grp([],_VZ) ->
     [].
 
-%% Replace the Variable with the new variable	
+%% Replace the Variable with the new variable   
 replace_var({var, Line, Var}, VarZip) ->
     ?LOG_DEBUG({Var, VarZip}),
     case lists:keyfind(Var, 1, VarZip) of
@@ -227,7 +330,7 @@ replace_var({var, Line, Var}, VarZip) ->
 get_new_vars(VarList, Cond, Body) ->
     ?LOG_DEBUG({body, Cond, Body}),
     
-    %% 	?PRINT({Var, is_var_present(Var, Body)}),
+    %%  ?PRINT({Var, is_var_present(Var, Body)}),
     lists:foldr(fun({var,Line,Var}, NewVarList) ->
                         ?LOG_DEBUG({var_present_cond, Var, is_var_present(Var, Cond)}),
                         ?LOG_DEBUG({var_not_present_body, Var, not is_var_present(Var, Body)}),
@@ -238,7 +341,7 @@ get_new_vars(VarList, Cond, Body) ->
                                 [{var,Line,Var} | NewVarList]
                         end;
                    (AnyVar, NewVarList) ->
-                        [AnyVar, NewVarList]				
+                        [AnyVar, NewVarList]                
                 end, [], VarList).
 
 get_new_var(Var) ->
@@ -255,11 +358,3 @@ is_var_present(Var, Body) when is_tuple(Body) ->
     is_var_present(Var, tuple_to_list(Body));
 is_var_present(_Var, _Body) ->
     false.
-
-is_guard_bif(erlang, Name, Arity) ->
-    erl_internal:guard_bif(Name, Arity);
-is_guard_bif(_, _Name, _Arity) ->
-    false.
-
-is_guard_bif(Name, Arity) ->
-    erl_internal:guard_bif(Name, Arity).
