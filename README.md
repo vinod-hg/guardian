@@ -1,6 +1,8 @@
 guardian
 ========
 
+![travis_ci](https://travis-ci.org/vinod-hg/guardian.svg?branch=master)
+
 Function guard is a very powerful feature of Erlang. But only BIF functions are supported. Guardian allows calling (any local or across module) functions in guards. This allows the code to be very short. Easy to code and maintain.
 
 Usage:
